@@ -6,11 +6,12 @@ Upload 1–50 .xlsx files and export a single XLSX per run.
 Modes:
 - Packing lists → export: ProductNumber, DeliveredQuantity, PkgIdentNumber_2, PkgIdentNumber_1
 - Invoices      → export: ProductNumber, UnitPrice, Quantity, DesAdvRef_Date
-  (If a requested column appears twice in the spec, we auto-deduplicate headers.)
 
-Cosmetics requested:
-- Added PkgIdentNumber_1 to Packing mode
-- In Invoices mode, Source_File is exported without the .xlsx extension
+Cosmetics & UX:
+- In Invoices mode, Source_File is exported **without** the .xlsx extension (filename = invoice no.).
+- Added a "Clear selected files" button to fully reset the uploader (avoids mixing with previous batch).
+- Shows the exact list of files included in the merge so you can verify.
+- Keeps **all rows** (no dedup) – invoices may repeat the same ProductNumber and that's preserved.
 """
 
 import io
@@ -114,6 +115,13 @@ def _extract_subset_from_file(file, targets: List[str], *, trim_ext: bool = Fals
 st.set_page_config(page_title="Bosch Packing & Invoices Merger", layout="wide")
 st.title("Bosch Merger – Packing Lists & Invoices")
 
+# Resettable uploader key to clear previous selections entirely
+if "upload_key" not in st.session_state:
+    st.session_state.upload_key = 0
+
+def _clear_uploads():
+    st.session_state.upload_key += 1
+
 mode = st.radio("Choose mode", ["Packing lists", "Invoices"], horizontal=True)
 
 if mode == "Packing lists":
@@ -129,9 +137,11 @@ with st.sidebar:
     else:
         drop_blank = st.checkbox("Drop rows with blank Quantity", value=False)
         parse_dates = st.checkbox("Parse DesAdvRef_Date as date", value=True)
+    st.button("Clear selected files", on_click=_clear_uploads, help="Reset the file uploader to start a fresh batch.")
 
 uploaded = st.file_uploader(
-    f"Upload {mode} .xlsx files (1–50)", type=["xlsx"], accept_multiple_files=True
+    f"Upload {mode} .xlsx files (1–50)", type=["xlsx"], accept_multiple_files=True,
+    key=f"uploader_{st.session_state.upload_key}"
 )
 
 if not uploaded:
@@ -140,6 +150,10 @@ if not uploaded:
 if len(uploaded) > 50:
     st.error("Please upload at most 50 files.")
     st.stop()
+
+with st.expander("Files included in this merge", expanded=False):
+    for up in uploaded:
+        st.write("•", up.name)
 
 # Extract from each file
 dfs: List[pd.DataFrame] = []
