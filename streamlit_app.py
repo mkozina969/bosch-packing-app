@@ -4,12 +4,17 @@ Bosch Merger – dual mode (Packing Lists + Invoices)
 Upload 1–50 .xlsx files and export a single XLSX per run.
 
 Modes:
-- Packing lists → export only: ProductNumber, DeliveredQuantity, PkgIdentNumber_2
-- Invoices      → export only: ProductNumber, UnitPrice, Quantity, DesAdvRef_Date
+- Packing lists → export: ProductNumber, DeliveredQuantity, PkgIdentNumber_2, PkgIdentNumber_1
+- Invoices      → export: ProductNumber, UnitPrice, Quantity, DesAdvRef_Date
   (If a requested column appears twice in the spec, we auto-deduplicate headers.)
+
+Cosmetics requested:
+- Added PkgIdentNumber_1 to Packing mode
+- In Invoices mode, Source_File is exported without the .xlsx extension
 """
 
 import io
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -23,7 +28,7 @@ import streamlit as st
 def _strip_accents(s: str) -> str:
     if not isinstance(s, str):
         return s
-    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicoding combining(c))
 
 
 def _norm_key(s: str) -> str:
@@ -45,7 +50,6 @@ def _find_header_row_and_map(raw: pd.DataFrame, target_headers: List[str]) -> Tu
     """Return (header_row_index, mapping target→original_column_name) if all targets found on some row.
     Matching is done on normalized keys.
     """
-    # for detection we deduplicate targets by normalized key
     targets_norm = [_norm_key(t) for t in target_headers]
     uniq_targets_norm = list(dict.fromkeys(targets_norm))  # preserve order
 
@@ -57,7 +61,6 @@ def _find_header_row_and_map(raw: pd.DataFrame, target_headers: List[str]) -> Tu
             if k and k not in norm_map:
                 norm_map[k] = str(v)
         if all(tk in norm_map for tk in uniq_targets_norm):
-            # Build mapping for original (non-deduped) requested names → original column header
             mapping: Dict[str, str] = {}
             for t, tk in zip(target_headers, targets_norm):
                 mapping[t] = norm_map[tk]
@@ -66,9 +69,6 @@ def _find_header_row_and_map(raw: pd.DataFrame, target_headers: List[str]) -> Tu
 
 
 def _extract_table_any_sheet(xl: pd.ExcelFile, target_headers: List[str]) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    """Try each sheet until we find one whose row contains all target headers.
-    Returns (table_df, mapping target→original)
-    """
     for name in xl.sheet_names:
         try:
             raw = xl.parse(name, header=None, dtype=object)
@@ -77,19 +77,16 @@ def _extract_table_any_sheet(xl: pd.ExcelFile, target_headers: List[str]) -> Tup
         hdr_idx, mapping = _find_header_row_and_map(raw, target_headers)
         if hdr_idx is not None:
             tbl = raw.iloc[hdr_idx + 1 :].copy()
-            # set real headers from that row
             tbl.columns = [str(c) for c in raw.iloc[hdr_idx].values]
-            # drop fully-empty columns
             tbl = tbl.dropna(axis=1, how="all")
             return tbl, mapping
     return pd.DataFrame(), {}
 
 
-def _extract_subset_from_file(file, targets: List[str]) -> pd.DataFrame:
+def _extract_subset_from_file(file, targets: List[str], *, trim_ext: bool = False) -> pd.DataFrame:
     xl = pd.ExcelFile(file)
     tbl, mapping = _extract_table_any_sheet(xl, targets)
 
-    # Prepare output columns (dedupe requested targets in header, but keep order)
     out_cols: List[str] = []
     seen = set()
     for t in targets:
@@ -98,7 +95,6 @@ def _extract_subset_from_file(file, targets: List[str]) -> pd.DataFrame:
             seen.add(t)
     out = pd.DataFrame(columns=out_cols)
 
-    # Fill columns from mapping
     for t in out_cols:
         src_col = mapping.get(t, None)
         if src_col and src_col in tbl.columns:
@@ -106,7 +102,10 @@ def _extract_subset_from_file(file, targets: List[str]) -> pd.DataFrame:
         else:
             out[t] = pd.NA
 
-    out["Source_File"] = getattr(file, "name", "uploaded.xlsx")
+    src_name = getattr(file, "name", "uploaded.xlsx")
+    if trim_ext:
+        src_name = os.path.splitext(src_name)[0]
+    out["Source_File"] = src_name
     return out
 
 
@@ -118,7 +117,7 @@ st.title("Bosch Merger – Packing Lists & Invoices")
 mode = st.radio("Choose mode", ["Packing lists", "Invoices"], horizontal=True)
 
 if mode == "Packing lists":
-    TARGETS = ["ProductNumber", "DeliveredQuantity", "PkgIdentNumber_2"]
+    TARGETS = ["ProductNumber", "DeliveredQuantity", "PkgIdentNumber_2", "PkgIdentNumber_1"]
 else:
     TARGETS = ["ProductNumber", "UnitPrice", "Quantity", "DesAdvRef_Date"]
 
@@ -146,7 +145,7 @@ if len(uploaded) > 50:
 dfs: List[pd.DataFrame] = []
 with st.spinner("Reading and extracting tables…"):
     for up in uploaded:
-        part = _extract_subset_from_file(up, TARGETS)
+        part = _extract_subset_from_file(up, TARGETS, trim_ext=(mode == "Invoices"))
         if not keep_source_file and "Source_File" in part.columns:
             part = part.drop(columns=["Source_File"]) 
         dfs.append(part)
@@ -163,7 +162,6 @@ else:
     if "Quantity" in merged.columns:
         merged["Quantity"] = pd.to_numeric(merged["Quantity"], errors="coerce")
     if "DesAdvRef_Date" in merged.columns and 'parse_dates' in locals() and parse_dates:
-        # Try to parse common date formats; leave as-is if parsing fails
         merged["DesAdvRef_Date"] = pd.to_datetime(merged["DesAdvRef_Date"], errors="coerce")
 
 # Drop blank rows option
