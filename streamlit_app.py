@@ -28,7 +28,7 @@ import streamlit as st
 def _strip_accents(s: str) -> str:
     if not isinstance(s, str):
         return s
-    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicoding combining(c))
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
 def _norm_key(s: str) -> str:
